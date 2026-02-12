@@ -1,0 +1,78 @@
+[
+  {
+    "id": "GDP_PPP_2023_bn",
+    "label": "GDP in 2023 (Billion USD, 2023)",
+    "unit": "Billion USD",
+    "fmt": "0,0"
+  },
+  {
+    "id": "GDP_growth_2223_pct",
+    "label": "GDP growth (%, 2022–23)",
+    "unit": "Percent",
+    "fmt": "0.0",
+    "proj": "GDP_growth_proj_2530_pct"
+  },
+  {
+    "id": "GDPpc_PPP_2023_kUSD",
+    "label": "Per capita GDP in 2023 (Thousand USD, 2023)",
+    "unit": "Thousand USD",
+    "fmt": "0.0"
+  },
+  {
+    "id": "Population_2022_m",
+    "label": "Population (million, 2022)",
+    "unit": "Million",
+    "fmt": "0.0"
+  },
+  {
+    "id": "Employment_2023_thousand",
+    "label": "Number of employment (Thousands persons, 2023)",
+    "unit": "Thousand persons",
+    "fmt": "0,0"
+  },
+  {
+    "id": "Employment_rate_2023_pct",
+    "label": "Employment rate (2023)",
+    "unit": "Percent",
+    "fmt": "0.0"
+  },
+  {
+    "id": "LP_level_per_worker_2023_kUSD",
+    "label": "Per-worker labor productivity level (Thousand USD per worker, 2023)",
+    "unit": "Thousand USD",
+    "fmt": "0.0"
+  },
+  {
+    "id": "LP_growth_2223_pct",
+    "label": "Per-worker labor productivity growth (%, 2022–23)",
+    "unit": "Percent",
+    "fmt": "0.0",
+    "proj": "LP_growth_proj_2530_pct"
+  },
+  {
+    "id": "Agri_share_GDP_2023_pct",
+    "label": "Agriculture share in GDP (2023)",
+    "unit": "Percent",
+    "fmt": "0.0"
+  },
+  {
+    "id": "Mfg_share_GDP_2023_pct",
+    "label": "Manufacturing share in GDP (2023)",
+    "unit": "Percent",
+    "fmt": "0.0"
+  },
+  {
+    "id": "Capital_prod_growth_2223_pct",
+    "label": "Capital productivity growth (2022–23)",
+    "unit": "Percent",
+    "fmt": "0.0",
+    "proj": "Capital_prod_growth_proj_2530_pct"
+  },
+  {
+    "id": "TFP_growth_2223_pct",
+    "label": "TFP growth (2022–23)",
+    "unit": "Percent",
+    "fmt": "0.0",
+    "proj": "TFP_growth_proj_2530_pct"
+  }
+]

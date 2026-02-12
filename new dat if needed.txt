@@ -1,0 +1,54 @@
+2) Best way to request new features without starting from scratch? And what if CSV Data_Master adds new columns?
+Best way to request changes (so we don’t restart)
+
+Do this each time:
+
+Upload the current working files (the exact ones deployed):
+index.html, admin.html, styles.css, app.js, data.js (+ any new assets)
+
+Tell me:
+
+What to change (exact behavior + where)
+
+What must not change (e.g., “no hardcoded numbers,” “keep layout,” “don’t touch data.js schema”)
+
+Any new screenshots (if layout/UI changes)
+
+This guarantees continuity and prevents “start from scratch.”
+
+If Data_Master CSV gets new columns
+
+You have two cases:
+
+Case A — You just want the new column available (data-only)
+
+Upload CSV in admin.html → the code already auto-detects new numeric columns and adds them to the indicator list with label = column name.
+
+No JSON needed.
+
+This is the fastest path.
+
+Case B — You want the new column to look “nice” (proper label, unit, projection pair, formatting)
+Then create/update the indicator labels JSON (recommended for polished output).
+You would add an entry like:
+
+{
+  "id": "New_Column_Name",
+  "label": "Nice indicator title",
+  "unit": "Percent",
+  "fmt": "0.0",
+  "proj": "New_Column_Name_proj_2530_pct"
+}
+
+
+Rule of thumb
+
+Add columns freely in Data_Master → they will show up automatically.
+
+Use JSON only when you want:
+
+human-friendly label
+
+Data vs Projection pairing (proj)
+
+consistent units/formatting
