@@ -249,6 +249,47 @@ function renderSummary(){
       .map(r=>({ name: r && r.Economy, v: r ? r[id] : null }))
       .filter(x=>x.name && isNum(x.v));
   }
+  function hasNumeric(id){
+    return DATA.some(r=>r && isNum(r[id]));
+  }
+  function unitShort(id){
+    if(/_pct$/.test(id) || id.includes("_pct")) return "%";
+    if(id === "LP_level_per_worker_2023_kUSD") return "kUSD/worker";
+    if(id === "GDPpc_PPP_2023_kUSD") return "kUSD";
+    if(id === "GDP_PPP_2023_bn") return "";
+    return "";
+  }
+  function formatIndicatorValue(id, v, opts){
+    opts = opts || {};
+    if(!isNum(v)) return "–";
+    const def = findIndicatorDefAny(id);
+    const dec = def ? decimalsFromFmt(def.fmt) : 1;
+    let s = fmtNumber(v, dec);
+    const u = unitShort(id);
+    if(opts.includeUnit !== false){
+      if(u === "%") s += "%";
+      else if(u) s += ` ${u}`;
+    }
+    return s;
+  }
+  function labelForId(id){
+    const def = findIndicatorDefAny(id);
+    if(!def) return id;
+    // If this is a projection column, adapt the base label (usually 2022–23) to 2025–30.
+    if(def.proj === id){
+      let lab = def.label || id;
+      lab = lab
+        .replace(/2022–23/g, "2025–30")
+        .replace(/2022-23/g, "2025–30")
+        .replace(/\(2022–23\)/g, "(2025–30)")
+        .replace(/\(2022-23\)/g, "(2025–30)");
+      if(!/2025/.test(lab)) lab += " (2025–30)";
+      if(!/Projection/i.test(lab)) lab += " (Projection)";
+      return lab;
+    }
+    return def.label || id;
+  }
+
   function leaderboard(id){
     const rows = sortedNumeric(id);
     const n = rows.length;
@@ -319,7 +360,7 @@ function renderSummary(){
     switchView("profile");
   }
 
-  // ---- Signals & alerts ----
+  // ---- Signals / Executive summary ----
   const sigLargestGdp = argmaxEconomy("GDP_PPP_2023_bn");
   const sigHighestLp = argmaxEconomy("LP_level_per_worker_2023_kUSD");
   const sigHighestTfp = argmaxEconomy("TFP_growth_2223_pct");
@@ -335,10 +376,321 @@ function renderSummary(){
   const totalGdp = gdpRows.reduce((s,x)=>s+x.v,0);
   const top5Share = (gdpRows.length && totalGdp) ? (gdpRows.slice(0,5).reduce((s,x)=>s+x.v,0) / totalGdp) : null;
 
+  // ---- Economy lists + state defaults (Summary-only UI state) ----
+  const economies = economiesAll();
+  if(!state.summarySegIndicatorId) state.summarySegIndicatorId = "GDP_growth_proj_2530_pct";
+  if(!state.summaryCompareIndicatorId) state.summaryCompareIndicatorId = "GDP_PPP_2023_bn";
+  if(!state.summaryCompareA) state.summaryCompareA = economies[0] || "";
+  if(!state.summaryCompareB) state.summaryCompareB = economies[1] || economies[0] || "";
+
+  // ---- Portfolio segmentation (median split) ----
+  function medianOf(values){
+    const a = values.filter(isNum).slice().sort((x,y)=>x-y);
+    const n = a.length;
+    if(!n) return null;
+    const mid = Math.floor(n/2);
+    return (n % 2) ? a[mid] : (a[mid-1] + a[mid]) / 2;
+  }
+  function unique(arr){
+    return Array.from(new Set(arr));
+  }
+  const segCandidateIds = unique([
+    "GDP_growth_proj_2530_pct",
+    "LP_growth_proj_2530_pct",
+    "TFP_growth_proj_2530_pct",
+    "GDP_growth_2223_pct",
+    "LP_growth_2223_pct",
+    "TFP_growth_2223_pct",
+    "Capital_prod_growth_proj_2530_pct",
+    "Capital_prod_growth_2223_pct",
+  ].filter(id=>hasNumeric(id)));
+
+  if(!segCandidateIds.includes(state.summarySegIndicatorId)){
+    state.summarySegIndicatorId = segCandidateIds[0] || state.summarySegIndicatorId;
+  }
+
+  const segXId = "LP_level_per_worker_2023_kUSD";
+  const segYId = state.summarySegIndicatorId;
+  const segRows = DATA
+    .map(r=>({ name:r && r.Economy, x:r? r[segXId] : null, y:r? r[segYId] : null }))
+    .filter(p=>p.name && isNum(p.x) && isNum(p.y));
+
+  const segXMed = medianOf(segRows.map(p=>p.x));
+  const segYMed = medianOf(segRows.map(p=>p.y));
+
+  const segBuckets = {
+    hh: [], // High LP / High growth
+    lh: [], // Low LP / High growth
+    hl: [], // High LP / Low growth
+    ll: []  // Low LP / Low growth
+  };
+  if(isNum(segXMed) && isNum(segYMed)){
+    segRows.forEach(p=>{
+      const highX = p.x >= segXMed;
+      const highY = p.y >= segYMed;
+      if(highX && highY) segBuckets.hh.push(p.name);
+      else if(!highX && highY) segBuckets.lh.push(p.name);
+      else if(highX && !highY) segBuckets.hl.push(p.name);
+      else segBuckets.ll.push(p.name);
+    });
+    // Keep deterministic ordering
+    Object.keys(segBuckets).forEach(k=>segBuckets[k].sort((a,b)=>a.localeCompare(b)));
+  }
+
+  function segChipList(names){
+    if(!names || !names.length) return `<div class="rankEmpty">—</div>`;
+    return `<div class="portSegChips">${names.map(n=>`<button class="segChip" data-economy="${escapeHtml(n)}">${escapeHtml(n)}</button>`).join("")}</div>`;
+  }
+
+  // Tooltip text (SG-ready): step-by-step + concrete examples using current X/Y and medians
+  function segFind(name){
+    return segRows.find(p=>p.name === name) || null;
+  }
+  function segLabelFor(highX, highY){
+    if(highX && highY) return "Leaders with momentum";
+    if(!highX && highY) return "Catch-up candidates";
+    if(highX && !highY) return "Mature slow-growers";
+    return "Structural challenge";
+  }
+  function segExampleBlock(econName){
+    if(!isNum(segXMed) || !isNum(segYMed)) return "";
+    const p = segFind(econName);
+    if(!p || !isNum(p.x) || !isNum(p.y)) return "";
+    const highX = p.x >= segXMed;
+    const highY = p.y >= segYMed;
+    const label = segLabelFor(highX, highY);
+    return [
+      `Example: Why ${econName} is in ${label}`,
+      `X = ${labelForId(segXId)} = ${formatIndicatorValue(segXId, p.x)}; median X = ${formatIndicatorValue(segXId, segXMed)} → ${highX ? "High LP" : "Low LP"}`,
+      `Y = ${labelForId(segYId)} = ${formatIndicatorValue(segYId, p.y)}; median Y = ${formatIndicatorValue(segYId, segYMed)} → ${highY ? "High growth" : "Low growth"}`,
+      `Result: ${highX ? "High LP" : "Low LP"} + ${highY ? "High growth" : "Low growth"} → ${label}`
+    ].join("\n");
+  }
+
+  const segTooltipText = [
+    "How it works (Portfolio segmentation)",
+    `X (productivity level) = ${labelForId(segXId)}`,
+    `Y (growth indicator) = ${labelForId(segYId)}`,
+    "We compute the median (middle) X and Y across economies with data.",
+    "High = above median. Low = below median.",
+    "",
+    "Labels mean:",
+    "Leaders with momentum = High X AND High Y",
+    "Catch-up candidates = Low X BUT High Y",
+    "Mature slow-growers = High X BUT Low Y",
+    "Structural challenge = Low X AND Low Y",
+    "",
+    segExampleBlock("Malaysia"),
+    "",
+    segExampleBlock("Mongolia"),
+    "",
+    "SG-ready: This is descriptive grouping based on median splits (not causal)."
+  ].filter(Boolean).join("\n");
+
+  const portSegHtml = (segRows.length && isNum(segXMed) && isNum(segYMed) && segCandidateIds.length) ? `
+    <div class="card" id="portfolioSegCard">
+      <div class="cardHeader">
+        <div>
+          <div class="cardTitle">Portfolio segmentation <span title="${escapeHtml(segTooltipText)}" style="margin-left:8px; opacity:.8; cursor:help; font-size:14px;">ⓘ</span></div>
+          <div class="cardSub">Segments are defined by the median LP level (x) and median indicator value (y). This is descriptive (not causal).</div>
+          <div class="cardSub" style="margin-top:6px;">X median (${escapeHtml(labelForId(segXId))}): <span class="mono">${formatIndicatorValue(segXId, segXMed)}</span> · Y median (${escapeHtml(labelForId(segYId))}): <span class="mono">${formatIndicatorValue(segYId, segYMed)}</span> · n=${segRows.length}</div>
+        </div>
+        <div class="controls">
+          <div class="chipK" style="margin-top:2px;">Segment by:</div>
+          <select class="select" id="segBySelect" aria-label="Segment by indicator">
+            ${segCandidateIds.map(id=>`<option value="${escapeHtml(id)}" ${id===segYId?"selected":""}>${escapeHtml(labelForId(id))}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+
+      <div class="portSegGrid">
+        <div class="portSegBox">
+          <div class="portSegTitle">High LP / High growth</div>
+          <div class="portSegSub">Leaders with momentum</div>
+          ${segChipList(segBuckets.hh)}
+        </div>
+        <div class="portSegBox">
+          <div class="portSegTitle">Low LP / High growth</div>
+          <div class="portSegSub">Catch-up candidates</div>
+          ${segChipList(segBuckets.lh)}
+        </div>
+        <div class="portSegBox">
+          <div class="portSegTitle">High LP / Low growth</div>
+          <div class="portSegSub">Mature slow-growers</div>
+          ${segChipList(segBuckets.hl)}
+        </div>
+        <div class="portSegBox">
+          <div class="portSegTitle">Low LP / Low growth</div>
+          <div class="portSegSub">Structural challenge</div>
+          ${segChipList(segBuckets.ll)}
+        </div>
+      </div>
+    </div>
+  ` : "";
+
+  // ---- Frontier comparator (economy vs economy) ----
+  const cmpIndicatorIds = unique([
+    "GDP_PPP_2023_bn",
+    "GDPpc_PPP_2023_kUSD",
+    "LP_level_per_worker_2023_kUSD",
+    "GDP_growth_2223_pct",
+    "LP_growth_2223_pct",
+    "TFP_growth_2223_pct",
+    "GDP_growth_proj_2530_pct",
+    "LP_growth_proj_2530_pct",
+    "TFP_growth_proj_2530_pct",
+    "Capital_prod_growth_2223_pct",
+    "Capital_prod_growth_proj_2530_pct",
+  ].filter(id=>hasNumeric(id)));
+
+  if(!cmpIndicatorIds.includes(state.summaryCompareIndicatorId)){
+    state.summaryCompareIndicatorId = cmpIndicatorIds[0] || state.summaryCompareIndicatorId;
+  }
+  if(state.summaryCompareA && !economies.includes(state.summaryCompareA)) state.summaryCompareA = economies[0] || "";
+  if(state.summaryCompareB && !economies.includes(state.summaryCompareB)) state.summaryCompareB = economies[1] || economies[0] || "";
+
+  const comparatorHtml = (cmpIndicatorIds.length && economies.length) ? `
+    <div class="card" id="frontierComparatorCard">
+      <div class="cardHeader">
+        <div>
+	<div class="cardTitle">Frontier comparator <span title="What this does:
+	Choose an indicator and two economies.
+	Where numbers come from:
+	We read the selected indicator value for Economy A and Economy B directly from data.
+	How ranks are calculated:
+	We take all economies that have a valid value for the selected indicator, sort them from highest to lowest, then assign ranks (Rank 1 = highest value).
+	How the comparison numbers are calculated:
+	- Ratio (A/B) = valueA ÷ valueB (if valueB is 0 or missing, ratio is not shown).
+	- Difference (A − B) = valueA − valueB.
+	- Rank delta = rankB − rankA (positive means Economy A ranks higher/better than Economy B)." style="margin-left:8px; opacity:.8; cursor:help; font-size:14px;">ⓘ</span></div>
+        
+          <div class="cardSub">Choose an indicator and compare any two economies (values + ratio + difference + ranks).</div>
+        </div>
+      </div>
+
+      <div class="fcForm">
+        <div>
+          <div class="fcFieldLabel">Indicator</div>
+          <select class="select" id="fcIndicatorSelect" aria-label="Comparator indicator">
+            ${cmpIndicatorIds.map(id=>`<option value="${escapeHtml(id)}" ${id===state.summaryCompareIndicatorId?"selected":""}>${escapeHtml(labelForId(id))}</option>`).join("")}
+          </select>
+        </div>
+        <div>
+          <div class="fcFieldLabel">Economy A</div>
+          <select class="select" id="fcEconomyA" aria-label="Select economy A">
+            ${economies.map(e=>`<option value="${escapeHtml(e)}" ${e===state.summaryCompareA?"selected":""}>${escapeHtml(e)}</option>`).join("")}
+          </select>
+        </div>
+        <div>
+          <div class="fcFieldLabel">Economy B</div>
+          <select class="select" id="fcEconomyB" aria-label="Select economy B">
+            ${economies.map(e=>`<option value="${escapeHtml(e)}" ${e===state.summaryCompareB?"selected":""}>${escapeHtml(e)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+
+      <div class="fcCompare">
+        <div class="fcPanel">
+          <div class="fcPanelTitle">Economy A</div>
+          <button class="textLink fcName" id="fcAName" data-economy="${escapeHtml(state.summaryCompareA)}">${escapeHtml(state.summaryCompareA || "–")}</button>
+          <div class="fcValue mono" id="fcAValue">—</div>
+          <div class="fcRank" id="fcARank">—</div>
+        </div>
+        <div class="fcPanel">
+          <div class="fcPanelTitle">Economy B</div>
+          <button class="textLink fcName" id="fcBName" data-economy="${escapeHtml(state.summaryCompareB)}">${escapeHtml(state.summaryCompareB || "–")}</button>
+          <div class="fcValue mono" id="fcBValue">—</div>
+          <div class="fcRank" id="fcBRank">—</div>
+        </div>
+      </div>
+
+      <div class="fcMetrics">
+        <div class="fcMetric">
+          <div class="fcMetricK">Ratio (A / B)</div>
+          <div class="fcMetricV mono" id="fcRatio">—</div>
+        </div>
+        <div class="fcMetric">
+          <div class="fcMetricK">Difference (A − B)</div>
+          <div class="fcMetricV mono" id="fcDiff">—</div>
+        </div>
+        <div class="fcMetric">
+          <div class="fcMetricK">Rank delta</div>
+          <div class="fcMetricV mono" id="fcRankDelta">—</div>
+          <div class="fcMetricS" id="fcRankNote">Higher value = better rank</div>
+        </div>
+      </div>
+    </div>
+  ` : "";
+
+  // ---- Concentration risk ----
+  function avgIndicatorExcluding(id, excludeName){
+    const rows = DATA.filter(r=>r && r.Economy !== excludeName && isNum(r[id]));
+    if(!rows.length) return null;
+    return rows.reduce((s,r)=>s+r[id],0) / rows.length;
+  }
+
+  let concHtml = "";
+  if(gdpRows.length && totalGdp){
+    const top3 = gdpRows.slice(0,3).reduce((s,x)=>s+x.v,0) / totalGdp;
+    const top5 = gdpRows.slice(0,5).reduce((s,x)=>s+x.v,0) / totalGdp;
+    const top10 = gdpRows.slice(0,10).reduce((s,x)=>s+x.v,0) / totalGdp;
+    const shares = gdpRows.map(x=>x.v/totalGdp);
+    const hhi = shares.reduce((s,p)=>s+(p*p),0);
+
+    const largestName = sigLargestGdp && sigLargestGdp.name ? sigLargestGdp.name : null;
+    const lpAll = avgIndicator("LP_level_per_worker_2023_kUSD");
+    const lpEx = largestName ? avgIndicatorExcluding("LP_level_per_worker_2023_kUSD", largestName) : null;
+
+    concHtml = `
+      <div class="card" id="concentrationRiskCard">
+        <div class="cardHeader">
+          <div>
+            <div class="cardTitle">Concentration risk <span title="What this shows:
+		Whether total GDP is dominated by a few large economies.
+		How we calculate (from data):
+		1) Use GDP (PPP) 2023: GDP_PPP_2023_bn.
+		2) Total GDP = sum of GDP_PPP_2023_bn across economies with data.
+		3) GDP share for an economy = GDP_i ÷ Total GDP.
+		4) Top-3 / Top-5 / Top-10 share = sum of the largest 3/5/10 shares.
+		  Example: Top-3 share = (GDP1 + GDP2 + GDP3) ÷ Total GDP.
+		5) HHI (0–1) = sum of (share^2). Higher = more concentrated.
+		6) Sensitivity (Avg LP level) uses LP_level_per_worker_2023_kUSD:
+		 Compare average LP level with all economies vs excluding the largest-GDP economy." style="margin-left:8px; opacity:.8; cursor:help; font-size:14px;">ⓘ</span></div>
+            <div class="cardSub">How concentrated the APO portfolio is (based on GDP in 2023, PPP).</div>
+          </div>
+        </div>
+        <div class="riskGrid">
+          <div class="riskTile">
+            <div class="riskK">Top-3 GDP share</div>
+            <div class="riskV">${isNum(top3)?fmtNumber(top3*100,1)+"%":"–"}</div>
+          </div>
+          <div class="riskTile">
+            <div class="riskK">Top-5 GDP share</div>
+            <div class="riskV">${isNum(top5)?fmtNumber(top5*100,1)+"%":"–"}</div>
+          </div>
+          <div class="riskTile">
+            <div class="riskK">Top-10 GDP share</div>
+            <div class="riskV">${isNum(top10)?fmtNumber(top10*100,1)+"%":"–"}</div>
+          </div>
+          <div class="riskTile">
+            <div class="riskK">HHI (0–1)</div>
+            <div class="riskV">${isNum(hhi)?fmtNumber(hhi,3):"–"}</div>
+            <div class="riskS">Higher = more concentrated</div>
+          </div>
+          <div class="riskTile">
+            <div class="riskK">Sensitivity (Avg LP level)</div>
+            <div class="riskV">${(isNum(lpAll) && isNum(lpEx)) ? `${fmtNumber(lpAll,1)} → ${fmtNumber(lpEx,1)}` : "–"}</div>
+            <div class="riskS">Excluding largest economy</div>
+          </div>
+        </div>
+        <div class="cardSub" style="margin-top:10px;">Validation: Shares and HHI use <span class="mono">GDP_PPP_2023_bn</span>. Sensitivity uses <span class="mono">LP_level_per_worker_2023_kUSD</span> average with/without the largest-GDP economy.</div>
+      </div>
+    `;
+  }
+
   // ---- Gap to frontier (LP level) ----
   const frontier = sigHighestLp;
   const bottom = argminEconomy("LP_level_per_worker_2023_kUSD");
-  const economies = economiesAll();
   const defaultCompare = (bottom && bottom.name) ? bottom.name : (economies[0] || "");
 
   // ---- Quadrant snapshot (default axes) ----
@@ -442,7 +794,10 @@ function renderSummary(){
     const cy = axis.y0 - ty * (axis.y0 - axis.y1);
     const rr = rFromSize(p.s);
     return `<circle class="qDot" data-economy="${escapeHtml(p.name)}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}">
-      <title>${escapeHtml(p.name)}\n${(quadXDef?.label||quadX)}: ${fmtNumber(p.x)}\n${(quadYDef?.label||quadY)}: ${fmtNumber(p.y)}\nGDP: ${isNum(p.s)?fmtNumber(p.s):"–"}</title>
+      <title>${escapeHtml(p.name)}
+${(quadXDef?.label||quadX)}: ${fmtNumber(p.x)}
+${(quadYDef?.label||quadY)}: ${fmtNumber(p.y)}
+GDP: ${isNum(p.s)?fmtNumber(p.s):"–"}</title>
     </circle>`;
   }).join("");
 
@@ -457,6 +812,39 @@ function renderSummary(){
       ${dots}
     </svg>
   `;
+
+  // ---- Executive summary lines (skip missing) ----
+  function execLine(label, id, obj, includeUnit){
+    if(!obj || !obj.name || !isNum(obj.v)) return "";
+    const val = formatIndicatorValue(id, obj.v, { includeUnit });
+    return `
+      <div class="execLine">
+        <span class="execK">${escapeHtml(label)}:</span>
+        <button class="textLink execLink" data-economy="${escapeHtml(obj.name)}">${escapeHtml(obj.name)}</button>
+        <span class="execV mono">(${val})</span>
+      </div>
+    `;
+  }
+  const execLines = [
+    execLine("Largest economy (GDP, 2023 PPP)", "GDP_PPP_2023_bn", sigLargestGdp, false),
+    execLine("Highest labor productivity (per worker, 2023)", "LP_level_per_worker_2023_kUSD", sigHighestLp, true),
+    execLine("Highest TFP growth (2022–23)", "TFP_growth_2223_pct", sigHighestTfp, true),
+    execLine("Fastest projected GDP growth (2025–30)", "GDP_growth_proj_2530_pct", sigFastGdpProj, true),
+    execLine("Fastest projected TFP growth (2025–30)", "TFP_growth_proj_2530_pct", sigTfpMomentumProj, true),
+  ].filter(Boolean).join("");
+
+  const execSummaryHtml = execLines ? `
+    <div class="card" id="execSummaryCard">
+      <div class="cardHeader">
+        <div>
+          <div class="cardTitle">Executive summary</div>
+          <div class="cardSub">Auto-generated highlights from <span class="mono">data.js</span>. Click any economy name below to open its profile.</div>
+        </div>
+      </div>
+      <div class="execList">${execLines}</div>
+      <div class="cardSub" style="margin-top:10px;">Validation: Each line uses the maximum value from its indicator column across economies.</div>
+    </div>
+  ` : "";
 
   // ---- Render ----
   root.innerHTML = `
@@ -478,41 +866,25 @@ function renderSummary(){
       </div>
     </div>
 
-    <div class="card">
-      <div class="cardHeader">
-        <div>
-          <div class="cardTitle">Signals & alerts</div>
-          <div class="cardSub">Quick scan of standouts from the latest data (and 2025–30 projections where available). Click a chip to open that economy.</div>
-        </div>
-      </div>
-      <div class="chipRow" id="sigRow">
-        <button class="chip" data-economy="${escapeHtml(sigLargestGdp?.name||"")}" ${sigLargestGdp?"":"disabled"}>
-          <span class="chipK">Largest economy</span>
-          <span class="chipV">${escapeHtml(sigLargestGdp?.name||"–")}</span>
-        </button>
-        <button class="chip" data-economy="${escapeHtml(sigHighestLp?.name||"")}" ${sigHighestLp?"":"disabled"}>
-          <span class="chipK">Highest LP level</span>
-          <span class="chipV">${escapeHtml(sigHighestLp?.name||"–")}</span>
-        </button>
-        <button class="chip" data-economy="${escapeHtml(sigHighestTfp?.name||"")}" ${sigHighestTfp?"":"disabled"}>
-          <span class="chipK">Highest TFP growth</span>
-          <span class="chipV">${escapeHtml(sigHighestTfp?.name||"–")}</span>
-        </button>
-        <button class="chip" data-economy="${escapeHtml(sigFastGdpProj?.name||"")}" ${sigFastGdpProj?"":"disabled"}>
-          <span class="chipK">Fastest GDP growth (proj.)</span>
-          <span class="chipV">${escapeHtml(sigFastGdpProj?.name||"–")}</span>
-        </button>
-        <button class="chip" data-economy="${escapeHtml(sigTfpMomentumProj?.name||"")}" ${sigTfpMomentumProj?"":"disabled"}>
-          <span class="chipK">TFP momentum (proj.)</span>
-          <span class="chipV">${escapeHtml(sigTfpMomentumProj?.name||"–")}</span>
-        </button>
-      </div>
-      <div class="cardSub" style="margin-top:10px;">Validation: Each chip is computed by taking the max value of its indicator column across economies.</div>
-    </div>
+    ${execSummaryHtml}
+    ${portSegHtml}
+    ${comparatorHtml}
+    ${concHtml}
 
     <div class="summary2col">
       <div class="card">
-        <div class="cardTitle">APO aggregates</div>
+        <div class="cardTitle">APO aggregates <span title="What this shows:
+	A simple ‘group summary’ across economies (only where data exists).
+
+	How we calculate (from data):
+	- Avg. LP level = average of LP_level_per_worker_2023_kUSD across economies with numeric values.
+	  Example: Avg = (v1 + v2 + ... + vn) ÷ n.
+	- Median LP level = the middle LP value after sorting (typical economy).
+	- Avg. GDP growth (proj.) = average of GDP_growth_proj_2530_pct.
+	- Avg. TFP growth (proj.) = average of TFP_growth_proj_2530_pct.
+	- Top-5 GDP share uses GDP_PPP_2023_bn:
+	  Top-5 share = (sum of top 5 GDP_PPP_2023_bn) ÷ (sum of all GDP_PPP_2023_bn).
+	Missing values are skipped (not guessed)." style="margin-left:8px; opacity:.8; cursor:help; font-size:14px;">ⓘ</span></div>
         <div class="cardSub">Portfolio view across economies.</div>
         <div class="kpiGrid">
           <div class="kpi">
@@ -574,7 +946,15 @@ function renderSummary(){
       <div class="card">
         <div class="cardHeader">
           <div>
-            <div class="cardTitle">Quadrant snapshot</div>
+        <div class="cardTitle">Quadrant snapshot <span title="What this shows:
+	A positioning map (not cause-and-effect). Each dot is one economy.
+	What each part means (from data):
+	- X-axis = GDP per capita (PPP) 2023: GDPpc_PPP_2023_kUSD.
+	- Y-axis = LP level per worker (2023): LP_level_per_worker_2023_kUSD.
+	- Dot size = total GDP (PPP) 2023: GDP_PPP_2023_bn.
+	How to read it (example):
+	- Top-right = higher income per person AND higher productivity per worker.
+	- Bottom-left = lower income per person AND lower productivity per worker." style="margin-left:8px; opacity:.8; cursor:help; font-size:14px;">ⓘ</span></div>
             <div class="cardSub">A single chart to show “where economies sit” on <b>${escapeHtml(quadXDef?.label||quadX)}</b> (x) vs <b>${escapeHtml(quadYDef?.label||quadY)}</b> (y). Dot size is GDP (PPP, 2023). Hover for exact values; click a dot to open the economy profile.</div>
           </div>
         </div>
@@ -625,13 +1005,97 @@ function renderSummary(){
   const tile = $("#tileTotalGdp");
   if(tile) tile.addEventListener("click", openGdpModal);
 
-  // Chip clicks -> profile
-  $$("#sigRow .chip").forEach(b=>{
+  // Executive summary clicks -> profile
+  $$("#execSummaryCard .execLink").forEach(b=>{
     b.addEventListener("click", ()=>{
       const e = b.dataset.economy;
       if(e) goProfile(e);
     });
   });
+
+  // Portfolio segmentation controls
+  const segSel = $("#segBySelect");
+  if(segSel){
+    segSel.addEventListener("change", ()=>{
+      state.summarySegIndicatorId = segSel.value;
+      renderSummary();
+    });
+  }
+  $$("#portfolioSegCard .segChip").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const e = b.dataset.economy;
+      if(e) goProfile(e);
+    });
+  });
+
+  // Frontier comparator controls
+  const fcInd = $("#fcIndicatorSelect");
+  const fcA = $("#fcEconomyA");
+  const fcB = $("#fcEconomyB");
+
+  function updateComparator(){
+    if(!fcInd || !fcA || !fcB) return;
+    const id = fcInd.value;
+    const aName = fcA.value;
+    const bName = fcB.value;
+
+    state.summaryCompareIndicatorId = id;
+    state.summaryCompareA = aName;
+    state.summaryCompareB = bName;
+
+    const rowA = DATA.find(r=>r && r.Economy === aName) || null;
+    const rowB = DATA.find(r=>r && r.Economy === bName) || null;
+
+    const aVal = rowA && isNum(rowA[id]) ? rowA[id] : null;
+    const bVal = rowB && isNum(rowB[id]) ? rowB[id] : null;
+
+    // ranks (descending)
+    const ranked = sortedNumeric(id).slice().sort((x,y)=>y.v-x.v);
+    const rankMap = new Map(ranked.map((x,i)=>[x.name, i+1]));
+    const n = ranked.length;
+    const aRank = rankMap.get(aName) || null;
+    const bRank = rankMap.get(bName) || null;
+
+    const aNameEl = $("#fcAName");
+    const bNameEl = $("#fcBName");
+    if(aNameEl){ aNameEl.textContent = aName || "–"; aNameEl.dataset.economy = aName || ""; }
+    if(bNameEl){ bNameEl.textContent = bName || "–"; bNameEl.dataset.economy = bName || ""; }
+
+    const aValEl = $("#fcAValue");
+    const bValEl = $("#fcBValue");
+    const aRankEl = $("#fcARank");
+    const bRankEl = $("#fcBRank");
+
+    if(aValEl) aValEl.textContent = isNum(aVal) ? formatIndicatorValue(id, aVal) : "–";
+    if(bValEl) bValEl.textContent = isNum(bVal) ? formatIndicatorValue(id, bVal) : "–";
+
+    if(aRankEl) aRankEl.textContent = (aRank && n) ? `Rank ${aRank} of ${n}` : "Rank —";
+    if(bRankEl) bRankEl.textContent = (bRank && n) ? `Rank ${bRank} of ${n}` : "Rank —";
+
+    const ratioEl = $("#fcRatio");
+    const diffEl = $("#fcDiff");
+    const rdEl = $("#fcRankDelta");
+
+    if(ratioEl){
+      ratioEl.textContent = (isNum(aVal) && isNum(bVal) && bVal !== 0) ? `${fmtNumber(aVal/bVal,2)}×` : "–";
+    }
+    if(diffEl){
+      diffEl.textContent = (isNum(aVal) && isNum(bVal)) ? formatIndicatorValue(id, aVal - bVal) : "–";
+    }
+    if(rdEl){
+      if(aRank && bRank) rdEl.textContent = `${(bRank - aRank) > 0 ? "+" : ""}${bRank - aRank}`;
+      else rdEl.textContent = "–";
+    }
+
+    // name clicks -> profile
+    if(aNameEl){ aNameEl.onclick = ()=>{ if(aName) goProfile(aName); }; }
+    if(bNameEl){ bNameEl.onclick = ()=>{ if(bName) goProfile(bName); }; }
+  }
+
+  if(fcInd) fcInd.addEventListener("change", updateComparator);
+  if(fcA) fcA.addEventListener("change", updateComparator);
+  if(fcB) fcB.addEventListener("change", updateComparator);
+  updateComparator();
 
   // Ranking items click -> profile
   $$("#summaryRankGrid .rankItem").forEach(it=>{
@@ -668,6 +1132,7 @@ function renderSummary(){
   if(sel) sel.addEventListener("change", updateGap);
   updateGap();
 }
+
 
 /** -------- Indicators -------- */
 function setIndicatorHeader(ind){
@@ -1310,7 +1775,7 @@ async function handleCsvUpload(file){
   const rows = parseCSV(txt);
   if(rows.length < 2) throw new Error("CSV appears empty.");
 
-  const header = rows[0].map(h => (h||"").trim());
+  const header = rows[0].map(h => (h||"").trim().replace(/^\uFEFF/, ""));
   const out = rows.slice(1).map(r=>{
     const obj = {};
     header.forEach((h, idx)=>{
