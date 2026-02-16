@@ -653,10 +653,17 @@ function renderSummary(){
 		3) GDP share for an economy = GDP_i ÷ Total GDP.
 		4) Top-3 / Top-5 / Top-10 share = sum of the largest 3/5/10 shares.
 		  Example: Top-3 share = (GDP1 + GDP2 + GDP3) ÷ Total GDP.
-		5) HHI (0–1) = sum of (share^2). Higher = more concentrated.
-		6) Sensitivity (Avg LP level) uses LP_level_per_worker_2023_kUSD:
-		 Compare average LP level with all economies vs excluding the largest-GDP economy." style="margin-left:8px; opacity:.8; cursor:help; font-size:14px;">ⓘ</span></div>
-            <div class="cardSub">How concentrated the APO portfolio is (based on GDP in 2023, PPP).</div>
+		5) HHI (Herfindahl–Hirschman Index) (0–1) = sum of (share^2). Higher = more concentrated.
+		Higher HHI = GDP is more dominated by a few economies (more concentration). Lower HHI = GDP is more spread out across many economies (less concentration).
+		If 4 economies each have 25% share:
+		HHI = 0.25² + 0.25² + 0.25² + 0.25²
+		= 4 × 0.0625
+		= 0.25
+		If 1 economy has 70% and 3 share 10% each:
+		I = 0.70² + 0.10² + 0.10² + 0.10²
+		0.49 + 0.01 + 0.01 + 0.01
+		0.52 (more concentrated)
+		6) Sensitivity (Avg LP level) uses LP_level_per_worker_2023_kUSD: ompare average LP level with all economies vs excluding the largest-GDP economy." style="margin-left:8px; opacity:.8; cursor:help; font-				:14px;">ⓘ</span></div> <div class="cardSub">How concentrated the APO portfolio is (based on GDP in 2023, PPP).</div>
           </div>
         </div>
         <div class="riskGrid">
@@ -884,7 +891,7 @@ GDP: ${isNum(p.s)?fmtNumber(p.s):"–"}</title>
 	- Avg. TFP growth (proj.) = average of TFP_growth_proj_2530_pct.
 	- Top-5 GDP share uses GDP_PPP_2023_bn:
 	  Top-5 share = (sum of top 5 GDP_PPP_2023_bn) ÷ (sum of all GDP_PPP_2023_bn).
-	Missing values are skipped (not guessed)." style="margin-left:8px; opacity:.8; cursor:help; font-size:14px;">ⓘ</span></div>
+	Missing values are skipped." style="margin-left:8px; opacity:.8; cursor:help; font-size:14px;">ⓘ</span></div>
         <div class="cardSub">Portfolio view across economies.</div>
         <div class="kpiGrid">
           <div class="kpi">
@@ -1930,7 +1937,7 @@ function init(){
         if(!f) return;
         try{ await handleCsvUpload(f); }
         catch(err){ alert("CSV load failed: " + (err?.message || err)); }
-        finally{ e.target.value = ""; }
+        finally{ /* keep selected filename visible */ }
       });
     }
 
@@ -1940,7 +1947,7 @@ function init(){
         if(!f) return;
         try{ await handleIndicatorJsonUpload(f); }
         catch(err){ alert("Indicator JSON load failed: " + (err?.message || err)); }
-        finally{ e.target.value = ""; }
+        finally{ /* keep selected filename visible */ }
       });
     }
 
